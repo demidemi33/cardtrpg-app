@@ -1,281 +1,159 @@
 ﻿import streamlit as st
+import pandas as pd
 import os
-import random
-import csv
 
-st.set_page_config(layout="wide")
+# ページの設定
+st.set_page_config(page_title="Card TRPG Simulator", layout="wide")
 
-# CHAR_CONFIG はスロットの「枠の役割(PREFIX)」とCSVの指定のみ
-CHAR_CONFIG = {
-    # エネミー側（スロット枠）
-    "boss": {"prefix": "[ボス]", "type": "enemy", "csv": "boss.csv"},
-    "za1":  {"prefix": "[雑魚1]", "type": "enemy", "csv": "za1.csv"},
-    "za2":  {"prefix": "[雑魚2]", "type": "enemy", "csv": "za2.csv"},
-    "za3":  {"prefix": "[雑魚3]", "type": "enemy", "csv": "za3.csv"},
-    "za4":  {"prefix": "[雑魚4]", "type": "enemy", "csv": "za4.csv"},
-    "za5":  {"prefix": "[雑魚5]", "type": "enemy", "csv": "za5.csv"},
-    "za6":  {"prefix": "[雑魚6]", "type": "enemy", "csv": "za6.csv"},
-    
-    # プレイヤー側（スロット枠）
-    "pc1":  {"prefix": "[PC1]", "type": "pc", "csv": "sen.csv"},
-    "pc2":  {"prefix": "[PC2]", "type": "pc", "csv": "tou.csv"},
-    "pc3":  {"prefix": "[PC3]", "type": "pc", "csv": "sou.csv"},
-    "pc4":  {"prefix": "[PC4]", "type": "pc", "csv": "mah.csv"},
-}
-
-# CSVファイルから「名前」と「固定手札」「デッキ中身」を構築する関数
-def load_deck_from_csv(filename, char_type):
-    pool = []
-    fixed_hand = [] 
-    default_names = {
-        "boss": "山賊頭領", "za1": "山賊小悪党", "za2": "山賊の弓兵", 
-        "za3": "山賊の邪術", "za4": "山賊の暗殺者", "za5": "山賊の盾兵", "za6": "山賊の犬",
-        "pc1": "戦士", "pc2": "盗賊", "pc3": "僧侶", "pc4": "魔法使い"
-    }
-    base = os.path.splitext(filename)[0]
-    deck_title = default_names.get(base, "名称未設定")
-    
-    if os.path.exists(filename):
-        try:
-            with open(filename, encoding='utf-8-sig') as f:
-                reader = csv.reader(f)
-                
-                # 1行目を「キャラクター名」として取得
-                first_row = next(reader)
-                if first_row and len(first_row) > 0 and first_row[0].strip():
-                    deck_title = first_row[0].strip()
-                
-                # 2行目をヘッダー行としてスキップ
-                header = next(reader) 
-                
-                # 3行目以降がカードデータ
-                for row in reader:
-                    if not row or len(row) < 4: continue
-                    c_id = row[0] if len(row) > 0 else "X-00"
-                    c_cost = row[2] if len(row) > 2 else "0"
-                    c_name = row[3] if len(row) > 3 else "不明"
-                    c_type = row[4] if len(row) > 4 else "スキル"
-                    c_atk = row[5] if len(row) > 5 else ""
-                    c_hp = row[6] if len(row) > 6 else ""
-                    c_effect = row[7] if len(row) > 7 else "（効果なし）"
-
-                    card_data = {
-                        "id": c_id.strip(), "name": c_name.strip(), "type": c_type.strip(),
-                        "cost": c_cost.strip(), "atk": c_atk.strip(), "hp": c_hp.strip(), "effect": c_effect.strip()
-                    }
-
-                    if char_type == "pc" and len(fixed_hand) < 3:
-                        fixed_hand.append(card_data)
-                    else:
-                        pool.append(card_data)
-        except Exception:
-            pass
-            
-    if not pool and not fixed_hand:
-        pfx = "R" if char_type == "pc" else "B"
-        pool = [
-            {"id": f"{pfx}-01", "name": "基本攻撃", "type": "スキル", "cost": "1", "atk": "1", "hp": "1", "effect": f"{filename}が空か見つかりません。"},
-            {"id": f"{pfx}-02", "name": "基本防御", "type": "スキル", "cost": "2", "atk": "0", "hp": "3", "effect": "【守護】"}
-        ]
-    
-    random.shuffle(pool)
-    return deck_title, fixed_hand, pool
-
-# --- セッションデータの初期化 ---
-if "chars" not in st.session_state:
-    st.session_state.chars = {}
-    for code, info in CHAR_CONFIG.items():
-        st.session_state.chars[code] = {
-            "prefix": info["prefix"],
-            "name": "読込中...", 
-            "type": info["type"],
-            "csv": info["csv"],
-            "deck": [],
-            "hand": [],
-            "battlefield": [],
-            "life": 6 if info["type"] == "enemy" else 15, 
-            "log": "ゲーム開始準備完了。",
-            "initialized": False
-        }
-
-if "round_count" not in st.session_state:
-    st.session_state.round_count = 1
-
-# アプリ起動時 or 初回選択時に初期化
-for code, char in st.session_state.chars.items():
-    if not char["initialized"]:
-        title, fixed_cards, cards = load_deck_from_csv(char["csv"], char["type"])
-        char["name"] = title
-        char["deck"] = cards
-        
-        if char["type"] == "pc":
-            char["hand"] = fixed_cards
-            for _ in range(5):
-                if char["deck"]:
-                    char["hand"].append(char["deck"].pop(0))
-        else:
-            char["hand"] = []
-            for _ in range(5):
-                if char["deck"]:
-                    char["hand"].append(char["deck"].pop(0))
-                    
-        char["initialized"] = True
-
-st.title("🎯 TRPG 動的キャラカード決戦ビューア")
-
-# --- ラウンド＆選択カウンター横並び配置 ---
-col_sel1, col_sel2, col_sel3 = st.columns([2, 3, 3])
-
-with col_sel1:
-    st.write("**⏳ 進行管理**")
-    c_rnd1, c_rnd2, c_rnd3 = st.columns([1, 2, 1])
-    with c_rnd1:
-        if st.button("➖", key="round_minus"):
-            st.session_state.round_count = max(1, st.session_state.round_count - 1)
-            st.rerun()
-    with c_rnd2:
-        st.session_state.round_count = st.number_input(f"ラウンド", min_value=1, value=st.session_state.round_count, label_visibility="collapsed")
-    with c_rnd3:
-        if st.button("➕", key="round_plus"):
-            st.session_state.round_count += 1
-            st.rerun()
-
-with col_sel2:
-    pc_code = st.selectbox(
-        "🛡️ 操作するPCを選択:", 
-        [k for k, v in CHAR_CONFIG.items() if v["type"] == "pc"],
-        format_func=lambda x: f"{st.session_state.chars[x]['prefix']} {st.session_state.chars[x]['name']}"
-    )
-with col_sel3:
-    enemy_code = st.selectbox(
-        "🤖 対峙するエネミーを選択:", 
-        [k for k, v in CHAR_CONFIG.items() if v["type"] == "enemy"],
-        format_func=lambda x: f"{st.session_state.chars[x]['prefix']} {st.session_state.chars[x]['name']}"
-    )
-
-infinite_hand = st.checkbox("🔄 敵の手札消費を無効化（減らない）", value=False)
-
-p_char = st.session_state.chars[pc_code]
-e_char = st.session_state.chars[enemy_code]
-
-st.write("---")
-
-# 盤面描画関数
-def render_character_zone(char, label, is_enemy, inf_hand, code_key):
-    # ライフカウンターインライン配置
-    header_col, life_col = st.columns([3, 1])
-    
-    with header_col:
-        st.subheader(f"{label} {char['prefix']} {char['name']} (山札残り: {len(char['deck'])}枚) 📄ファイル:{char['csv']}")
-        
-    with life_col:
-        st.write(f"**❤️ ライフ: {char['life']}**")
-        l_btn1, l_btn2 = st.columns([1, 1])
-        with l_btn1:
-            if st.button("➖", key=f"life_m_{code_key}"):
-                char["life"] -= 1
-                st.rerun()
-        with l_btn2:
-            if st.button("➕", key=f"life_p_{code_key}"):
-                char["life"] += 1
-                st.rerun()
-    
-    st.write("**【 場（ユニット・エンチャント） 】**")
-    if char["battlefield"]:
-        cols = st.columns(max(len(char["battlefield"]), 1))
-        for i, card in enumerate(char["battlefield"]):
-            with cols[i]:
-                type_pfx = card['type'][0] if card['type'] else "ス"
-                atk_val = card['atk'] if card['atk'] else "0"
-                hp_val = card['hp'] if card['hp'] else "0"
-                
-                bf_markdown = f"**[{card['id']}] 【{card['name']}】** \n({type_pfx}) :{card['cost']}:AT:{atk_val} / DF:{hp_val}  \n*{card['effect']}*"
-                st.info(bf_markdown)
-                
-                if st.button(f"🗑️ 場の{i+1}を消去", key=f"k_bf_{char['csv']}_{card['id']}_{i}"):
-                    removed = char["battlefield"].pop(i)
-                    char["log"] = f"💥 場から「{removed['name']}」を消去しました。"
-                    st.rerun()
+# データの読み込み関数
+@st.cache_data
+def load_data():
+    # パソコン内にある「赤リスト」「青のリスト」という名前のファイルを読み込みます
+    # ファイルがない場合はエラーを防ぐためのサンプルデータを動かします
+    if os.path.exists("赤リスト"):
+        red_df = pd.read_csv("赤リスト")
+    elif os.path.exists("red_list.csv"):
+        red_df = pd.read_csv("red_list.csv")
     else:
-        st.caption("（場にカードはありません）")
+        red_df = pd.DataFrame({
+            "色": ["赤", "赤"], "コスト": [1, 2], 
+            "カード名": ["小攻撃", "盾防御"], "種類": ["スキル", "スキル"],
+            "攻撃": [2, 0], "HP": [1, 3], "効果": ["なし", "守護"]
+        })
         
-    st.write("")
+    if os.path.exists("青のリスト"):
+        blue_df = pd.read_csv("青のリスト")
+    elif os.path.exists("blue_list.csv"):
+        blue_df = pd.read_csv("blue_list.csv")
+    else:
+        blue_df = pd.DataFrame({
+            "色": ["青", "青"], "コスト": [1, 2], 
+            "カード名": ["不意の一撃", "瞬縛斬り"], "種類": ["スキル", "スキル"],
+            "攻撃": [1, 2], "HP": [1, 1], "効果": ["奇襲", "場に出た時タップ"]
+        })
+        
+    return pd.concat([red_df, blue_df], ignore_index=True)
+
+# セッション状態の初期化（プレイヤーのライフや盤面の保存）
+if "player_life" not in st.session_state:
+    st.session_state.player_life = 20
+if "boss_life" not in st.session_state:
+    st.session_state.boss_life = 50
+if "battlefield" not in st.session_state:
+    st.session_state.battlefield = []
+if "round" not in st.session_state:
+    st.session_state.round = 1
+
+# データのロード
+df = load_data()
+
+# タイトル
+st.title("⚔️ カードTRPG セッションシミュレーター")
+
+# ----------------- サイドバー：ステータス管理 -----------------
+with st.sidebar:
+    st.header("📊 ステータス管理")
+    st.subheader(f"ラウンド: {st.session_state.round}")
+    if st.button("次のラウンドへ"):
+        st.session_state.round += 1
+        
+    st.divider()
     
-    st.write("**【 手札 】**")
-    col_d, col_r = st.columns([1, 5])
-    with col_d:
-        if st.button(f"➕ 1枚引く", key=f"d_{char['csv']}"):
-            if char["deck"]:
-                drawn = char["deck"].pop(0)
-                char["hand"].append(drawn)
-                char["log"] = f"🃏 山札の上から「{drawn['name']}」を引きました。"
+    # ライフカウンター
+    st.session_state.player_life = st.number_input("👤 プレイヤーライフ", value=st.session_state.player_life)
+    st.session_state.boss_life = st.number_input("👹 ボスライフ", value=st.session_state.boss_life)
+    
+    st.divider()
+    st.caption("GitHub ＆ Streamlit Cloud 公開用バージョン")
+
+# ----------------- メイン画面：2カラム構成 -----------------
+col1, col2 = st.columns([1, 1])
+
+# 左側：カードリストから選んで場に出すエリア
+with col1:
+    st.header("🗂️ カード図鑑・配置")
+    
+    # 色でのフィルタリング
+    color_filter = st.selectbox("色を選択", ["すべて", "赤", "青"])
+    filtered_df = df if color_filter == "すべて" else df[df["色"] == color_filter]
+    
+    # カードの選択
+    selected_card_name = st.selectbox("配置・使用するカードを選択", filtered_df["カード名"].tolist())
+    card_info = df[df["カード名"] == selected_card_name].iloc[0]
+    
+    # カード詳細表示
+    st.markdown(f"""
+    ### 🃏 **{card_info['カード名']}** ({card_info['種類']})
+    - **色/コスト:** {card_info['色']} / {card_info['コスト']}
+    - **ステータス:** ⚔️ {card_info['攻撃']} / ❤️ {card_info['HP']}
+    - **効果:** *{card_info['効果'] if pd.notna(card_info['効果']) else 'なし'}*
+    """)
+    
+    # 戦場への配置ボタン
+    if card_info['種類'] == "スキル":
+        if st.button("🛑 このスキルを戦場に配置"):
+            if len(st.session_state.battlefield) < 10:  # 上限10枠
+                # 新しく配置されたスキルはルール通り「構え」状態（未使用）で出ます
+                new_skill = {
+                    "id": len(st.session_state.battlefield) + 1,
+                    "name": card_info['カード名'],
+                    "atk": card_info['攻撃'],
+                    "hp": card_info['HP'],
+                    "effect": card_info['効果'] if pd.notna(card_info['効果']) else "なし",
+                    "is_used": False  # 初期状態は「未使用」
+                }
+                st.session_state.battlefield.append(new_skill)
+                st.success(f"「{card_info['カード名']}」を【未使用（構え）】で配置しました！")
+                st.rerun()
             else:
-                char["log"] = "⚠️ 山札がありません（ドロー不可）。"
-            st.rerun()
-    with col_r:
-        if st.button(f"🔄 デッキ再読込・初期化", key=f"reset_{char['csv']}"):
-            char["initialized"] = False
-            st.rerun()
-            
-    if char["hand"]:
-        cols_h = st.columns(max(len(char["hand"]), 1))
-        for i, card in enumerate(char["hand"]):
-            with cols_h[i]:
-                type_pfx = card['type'][0] if card['type'] else "ス"
-                
-                status_line = f"({type_pfx}) :{card['cost']}:"
-                if card['atk'] or card['hp']:
-                    atk_val = card['atk'] if card['atk'] else "0"
-                    hp_val = card['hp'] if card['hp'] else "0"
-                    status_line += f"AT:{atk_val} / DF:{hp_val}"
-                
-                card_markdown = f"**[{card['id']}] 【{card['name']}】** \n{status_line}  \n*{card['effect']}*"
-                st.success(card_markdown)
-                
-                # 操作ボタン群
-                if "スキル" in card["type"] or "エンチャント" in card["type"]:
-                    if st.button(f"⚔️ 場に出す", key=f"p_{char['csv']}_{card['id']}_{i}"):
-                        if is_enemy and inf_hand:
-                            played = card.copy()
-                        else:
-                            played = char["hand"].pop(i)
-                        char["battlefield"].append(played)
-                        char["log"] = f"⚔️ 「{played['name']}」を場に出しました。"
-                        st.rerun()
-                else:
-                    if st.button(f"⚡ アーツ発動", key=f"p_art_{char['csv']}_{card['id']}_{i}"):
-                        if is_enemy and inf_hand:
-                            played = card
-                        else:
-                            played = char["hand"].pop(i)
-                        char["log"] = f"⚡ アーツ「{played['name']}」を発動しました。"
-                        st.rerun()
-                
-                # 🌟 山札操作ボタンを横並びで配置
-                col_to_top, col_to_bot = st.columns([1, 1])
-                with col_to_top:
-                    if st.button(f"🔼 上に戻す", key=f"top_{char['csv']}_{card['id']}_{i}"):
-                        target_card = char["hand"].pop(i)
-                        char["deck"].insert(0, target_card) # 山札の先頭(一番上)へ追加
-                        char["log"] = f"🔼 「{target_card['name']}」を山札の一番上に戻しました。"
-                        st.rerun()
-                with col_to_bot:
-                    if st.button(f"🔽 下に戻す", key=f"bot_{char['csv']}_{card['id']}_{i}"):
-                        target_card = char["hand"].pop(i)
-                        char["deck"].append(target_card) # 山札の末尾(一番下)へ追加
-                        char["log"] = f"🔽 「{target_card['name']}」を山札の一番下に戻しました。"
-                        st.rerun()
-                        
-                if st.button(f"❌ 消去", key=f"k_h_{char['csv']}_{card['id']}_{i}"):
-                    removed = char["hand"].pop(i)
-                    char["log"] = f"🗑️ 手札から「{removed['name']}」を消去しました。"
-                    st.rerun()
+                st.error("スキル枠（10枠）が上限に達しています！")
     else:
-        st.caption("（手札はありません）")
+        if st.button("✨ このアーツ/エンチャントを使用（即時使い捨て）"):
+            st.info(f"「{card_info['カード名']}」の効果を発動しました（捨て札へ）。")
 
-render_character_zone(e_char, "🤖 エネミー", is_enemy=True, inf_hand=infinite_hand, code_key=enemy_code)
-st.write("---")
-render_character_zone(p_char, "🛡️ プレイヤー", is_enemy=False, inf_hand=False, code_key=pc_code)
+# 右側：現在の戦場（使用済み・未使用ボタン付き！）
+with col2:
+    st.header("🛡️ 現在の戦場（配置済みスキル）")
+    
+    # 一括操作用のボタン（自分のターンが来たら全アンタップする仕組み）
+    if st.session_state.battlefield:
+        if st.button("🔄 自分のターン開始（すべてのカードを『未使用』に戻す）"):
+            for skill in st.session_state.battlefield:
+                skill["is_used"] = False
+            st.success("すべてのスキルが未使用（行動可能）になりました！")
+            st.rerun()
+        st.divider()
 
-st.write("---")
-st.info(f"💬 **ログ:** {e_char['log']} | {p_char['log']}")
+    if not st.session_state.battlefield:
+        st.write("戦場にはまだスキルが配置されていません。")
+    else:
+        # 配置されているスキルをループで1枚ずつカード型にして表示
+        for idx, skill in enumerate(st.session_state.battlefield):
+            is_used = skill["is_used"]
+            
+            # 使用済みか未使用かで見た目の文字やマークを変える
+            if is_used:
+                card_title = f"🚫 【使用済み】 {skill['name']}"
+                button_label = "⭕ 未使用に戻す"
+            else:
+                card_title = f"⚔️ 【未使用】 {skill['name']}"
+                button_label = "❌ 使用済みにする"
+            
+            # 個別のカードを綺麗な枠で囲む
+            with st.container(border=True):
+                c_left, c_right = st.columns([3, 2])
+                
+                with c_left:
+                    st.markdown(f"**{card_title}** (⚔️{skill['atk']} / ❤️{skill['hp']})")
+                    st.caption(f"効果: {skill['effect']}")
+                
+                with c_right:
+                    # 「使用済み / 未使用」をパチッと切り替える個別ボタン
+                    if st.button(button_label, key=f"status_btn_{idx}"):
+                        st.session_state.battlefield[idx]["is_used"] = not is_used
+                        st.rerun()
+                    
+                    # 破壊・破棄されたときに場から消すボタン
+                    if st.button("💥 破棄して墓地へ", key=f"del_btn_{idx}"):
+                        st.session_state.battlefield.pop(idx)
+                        st.rerun()
